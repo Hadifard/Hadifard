@@ -11,6 +11,11 @@ on:
 permissions:
   contents: write
 
+# never run two renders at the same time
+concurrency:
+  group: render-banner
+  cancel-in-progress: false
+
 jobs:
   render:
     runs-on: ubuntu-latest
@@ -64,4 +69,12 @@ jobs:
           git add assets/hero.webp assets/hero-poster.png assets/.render-hash
           git diff --cached --quiet && exit 0
           git commit -m "chore: re-render README banner"
-          git push
+          # main may have moved while the banner was rendering (a push of yours, another workflow, ...):
+          # re-apply this commit on top of the newest main (our freshly rendered files win) and retry
+          for i in 1 2 3 4 5; do
+            git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push && exit 0
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          echo "could not push the re-rendered banner" >&2
+          exit 1
