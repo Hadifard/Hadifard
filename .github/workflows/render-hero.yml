@@ -1,0 +1,67 @@
+name: Render README banner
+
+# Re-renders assets/hero.webp (the animated 3D network at the top of the README)
+# whenever the pinned repositories of the site repo change.
+
+on:
+  schedule:
+    - cron: '47 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the site (source of the 3D page + pinned.json)
+        uses: actions/checkout@v4
+        with:
+          repository: Hadifard/hadifard.github.io
+          path: site
+
+      - name: Refresh pinned / public repositories (so the 6 pins are always the large front neurons)
+        continue-on-error: true
+        run: node site/scripts/update-pinned.mjs site/data/pinned.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_LOGIN: Hadifard
+
+      - name: Skip when nothing changed
+        id: chk
+        run: |
+          H=$(cat site/data/pinned.json site/index.html | sha256sum | cut -c1-16)
+          echo "hash=$H" >> "$GITHUB_OUTPUT"
+          if [ -f assets/.render-hash ] && [ "$(cat assets/.render-hash)" = "$H" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+
+      - name: Install renderer
+        if: steps.chk.outputs.skip != 'true'
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y ffmpeg
+          npm init -y >/dev/null
+          npm i playwright@1.56.0
+          npx playwright install --with-deps chromium
+
+      - name: Render
+        if: steps.chk.outputs.skip != 'true'
+        run: |
+          node scripts/render-hero.mjs site assets/hero.webp
+          echo "${{ steps.chk.outputs.hash }}" > assets/.render-hash
+
+      - name: Commit
+        if: steps.chk.outputs.skip != 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/hero.webp assets/hero-poster.png assets/.render-hash
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: re-render README banner"
+          git push
